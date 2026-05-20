@@ -122,13 +122,13 @@ type ForceReconnectStruct struct {
 }
 
 type ProxyHealth struct {
-	InstanceId    string     `json:"instanceId"`
-	ProxyAddress  string     `json:"proxyAddress"`
-	Status        string     `json:"status"`
-	LastCheck     *time.Time `json:"lastCheck,omitempty"`
-	LatencyMs     *int64     `json:"latencyMs,omitempty"`
-	Error         string     `json:"error,omitempty"`
-	ThresholdMs   int        `json:"thresholdMs"`
+	InstanceId   string     `json:"instanceId"`
+	ProxyAddress string     `json:"proxyAddress"`
+	Status       string     `json:"status"`
+	LastCheck    *time.Time `json:"lastCheck,omitempty"`
+	LatencyMs    *int64     `json:"latencyMs,omitempty"`
+	Error        string     `json:"error,omitempty"`
+	ThresholdMs  int        `json:"thresholdMs"`
 }
 
 func (i instances) StartProxyHealthMonitor(ctx context.Context) {
