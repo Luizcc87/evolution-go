@@ -20,12 +20,15 @@ type InstanceHandler interface {
 	Logout(ctx *gin.Context)
 	Delete(ctx *gin.Context)
 	Status(ctx *gin.Context)
+	ProxyStatus(ctx *gin.Context)
 	Qr(ctx *gin.Context)
 	All(ctx *gin.Context)
 	Info(ctx *gin.Context)
 	Pair(ctx *gin.Context)
 	SetProxy(ctx *gin.Context)
 	DeleteProxy(ctx *gin.Context)
+	ProxyStatusAdmin(ctx *gin.Context)
+	ProxyStatusAllAdmin(ctx *gin.Context)
 	ForceReconnect(ctx *gin.Context)
 	GetLogs(ctx *gin.Context)
 	GetAdvancedSettings(ctx *gin.Context)
@@ -262,6 +265,24 @@ func (i *instanceHandler) Status(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"message": "success", "data": status})
 }
 
+func (i *instanceHandler) ProxyStatus(ctx *gin.Context) {
+	getInstance := ctx.MustGet("instance")
+
+	instance, ok := getInstance.(*instance_model.Instance)
+	if !ok {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		return
+	}
+
+	health, err := i.instanceService.GetProxyHealth(instance.Id)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{"message": "success", "data": health})
+}
+
 // Get instance QR code
 // @Summary Get instance QR code
 // @Description Get instance QR code
@@ -485,6 +506,32 @@ func (i *instanceHandler) DeleteProxy(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, gin.H{"message": "success"})
+}
+
+func (i *instanceHandler) ProxyStatusAdmin(ctx *gin.Context) {
+	instanceId := ctx.Param("instanceId")
+	if instanceId == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "instanceId is required"})
+		return
+	}
+
+	health, err := i.instanceService.GetProxyHealth(instanceId)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{"message": "success", "data": health})
+}
+
+func (i *instanceHandler) ProxyStatusAllAdmin(ctx *gin.Context) {
+	health, err := i.instanceService.GetProxyHealthAll()
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{"message": "success", "data": health})
 }
 
 // Force reconnect

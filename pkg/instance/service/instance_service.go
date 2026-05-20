@@ -3,9 +3,13 @@ package instance_service
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -44,6 +48,9 @@ type InstanceService interface {
 	GetLogs(instanceId string, startDate, endDate time.Time, level string, limit int) ([]logger_wrapper.LogEntry, error)
 	GetAdvancedSettings(instanceId string) (*instance_model.AdvancedSettings, error)
 	UpdateAdvancedSettings(instanceId string, settings *instance_model.AdvancedSettings) error
+	StartProxyHealthMonitor(ctx context.Context)
+	GetProxyHealth(instanceId string) (*ProxyHealth, error)
+	GetProxyHealthAll() ([]*ProxyHealth, error)
 }
 
 type instances struct {
@@ -114,6 +121,359 @@ type ForceReconnectStruct struct {
 	Number string `json:"number"`
 }
 
+type ProxyHealth struct {
+	InstanceId    string     `json:"instanceId"`
+	ProxyAddress  string     `json:"proxyAddress"`
+	Status        string     `json:"status"`
+	LastCheck     *time.Time `json:"lastCheck,omitempty"`
+	LatencyMs     *int64     `json:"latencyMs,omitempty"`
+	Error         string     `json:"error,omitempty"`
+	ThresholdMs   int        `json:"thresholdMs"`
+}
+
+func (i instances) StartProxyHealthMonitor(ctx context.Context) {
+	if i.config == nil || !i.config.ProxyHealthEnabled {
+		return
+	}
+
+	interval := time.Duration(i.config.ProxyHealthIntervalS) * time.Second
+	if interval <= 0 {
+		interval = 60 * time.Second
+	}
+
+	go func() {
+		i.runProxyHealthCheckOnce()
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				i.runProxyHealthCheckOnce()
+			}
+		}
+	}()
+}
+
+func (i instances) runProxyHealthCheckOnce() {
+	healthLogger := i.loggerWrapper.GetLogger("proxy-health")
+	startedAt := time.Now()
+
+	instances, err := i.instanceRepository.GetAll(i.config.ClientName)
+	if err != nil {
+		healthLogger.LogWarn("[proxy-health] Failed to list instances: %v", err)
+		return
+	}
+
+	now := time.Now().UTC()
+
+	var total int
+	var active int
+	var inactive int
+	var slow int
+	var proxyErr int
+
+	for _, inst := range instances {
+		if inst == nil || inst.Id == "" {
+			continue
+		}
+
+		total++
+		oldStatus := strings.TrimSpace(inst.ProxyStatus)
+		oldErr := strings.TrimSpace(inst.ProxyError)
+		proxyAddress := i.proxyDisplayAddress(inst)
+
+		status, latencyMs, errMsg := i.checkProxyConnectivity(inst)
+		errMsg = strings.TrimSpace(errMsg)
+
+		switch status {
+		case "active":
+			active++
+		case "inactive":
+			inactive++
+		case "slow":
+			slow++
+		case "error":
+			proxyErr++
+		}
+
+		shouldLog := status == "error" || status == "slow" || status != oldStatus || errMsg != oldErr
+		if shouldLog {
+			lat := int64(0)
+			if latencyMs != nil {
+				lat = *latencyMs
+			}
+
+			if status == "error" {
+				healthLogger.LogWarn("[proxy-health] instance=%s proxy=%s status=%s latency_ms=%d error=%s", inst.Id, proxyAddress, status, lat, errMsg)
+			} else if status == "slow" {
+				healthLogger.LogWarn("[proxy-health] instance=%s proxy=%s status=%s latency_ms=%d threshold_ms=%d", inst.Id, proxyAddress, status, lat, i.config.ProxyHealthMaxLatMs)
+			} else {
+				healthLogger.LogInfo("[proxy-health] instance=%s proxy=%s status=%s latency_ms=%d", inst.Id, proxyAddress, status, lat)
+			}
+		}
+
+		err := i.instanceRepository.UpdateProxyHealth(inst.Id, status, &now, latencyMs, errMsg)
+		if err != nil {
+			i.loggerWrapper.GetLogger(inst.Id).LogWarn("[%s] Failed to persist proxy health: %v", inst.Id, err)
+		}
+	}
+
+	elapsedMs := time.Since(startedAt) / time.Millisecond
+	healthLogger.LogInfo("[proxy-health] cycle complete total=%d active=%d slow=%d error=%d inactive=%d duration_ms=%d", total, active, slow, proxyErr, inactive, elapsedMs)
+}
+
+func (i instances) GetProxyHealth(instanceId string) (*ProxyHealth, error) {
+	inst, err := i.instanceRepository.GetInstanceByID(instanceId)
+	if err != nil {
+		return nil, err
+	}
+	return i.proxyHealthFromInstance(inst), nil
+}
+
+func (i instances) GetProxyHealthAll() ([]*ProxyHealth, error) {
+	instances, err := i.instanceRepository.GetAll(i.config.ClientName)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]*ProxyHealth, 0, len(instances))
+	for _, inst := range instances {
+		if inst == nil {
+			continue
+		}
+		out = append(out, i.proxyHealthFromInstance(inst))
+	}
+	return out, nil
+}
+
+func (i instances) proxyHealthFromInstance(inst *instance_model.Instance) *ProxyHealth {
+	proxyAddress := i.proxyDisplayAddress(inst)
+
+	status := strings.TrimSpace(inst.ProxyStatus)
+	if status == "" {
+		status = "inactive"
+	}
+
+	threshold := 1500
+	if i.config != nil && i.config.ProxyHealthMaxLatMs > 0 {
+		threshold = i.config.ProxyHealthMaxLatMs
+	}
+
+	return &ProxyHealth{
+		InstanceId:   inst.Id,
+		ProxyAddress: proxyAddress,
+		Status:       status,
+		LastCheck:    inst.ProxyLastCheck,
+		LatencyMs:    inst.ProxyLatencyMs,
+		Error:        strings.TrimSpace(inst.ProxyError),
+		ThresholdMs:  threshold,
+	}
+}
+
+func (i instances) proxyDisplayAddress(inst *instance_model.Instance) string {
+	proxyConfig, ok := i.effectiveProxyConfig(inst)
+	if !ok || proxyConfig.Host == "" || proxyConfig.Port == "" {
+		return ""
+	}
+
+	proto := utils.NormalizeProxyProtocol(proxyConfig.Protocol, proxyConfig.Port)
+	host := strings.TrimSpace(proxyConfig.Host)
+	port := strings.TrimSpace(proxyConfig.Port)
+	return fmt.Sprintf("%s://%s", proto, net.JoinHostPort(host, port))
+}
+
+func (i instances) effectiveProxyConfig(inst *instance_model.Instance) (*ProxyConfig, bool) {
+	var cfg ProxyConfig
+	proxyStr := strings.TrimSpace(inst.Proxy)
+
+	if proxyStr != "" && proxyStr != "null" && proxyStr != "{}" {
+		_ = json.Unmarshal([]byte(proxyStr), &cfg)
+	}
+
+	if strings.TrimSpace(cfg.Host) == "" {
+		cfg.Host = i.config.ProxyHost
+	}
+	if strings.TrimSpace(cfg.Port) == "" {
+		cfg.Port = i.config.ProxyPort
+	}
+	if strings.TrimSpace(cfg.Protocol) == "" {
+		cfg.Protocol = i.config.ProxyProtocol
+	}
+	if strings.TrimSpace(cfg.Username) == "" {
+		cfg.Username = i.config.ProxyUsername
+	}
+	if strings.TrimSpace(cfg.Password) == "" {
+		cfg.Password = i.config.ProxyPassword
+	}
+
+	if strings.TrimSpace(cfg.Host) == "" || strings.TrimSpace(cfg.Port) == "" {
+		return nil, false
+	}
+
+	cfg.Protocol = utils.NormalizeProxyProtocol(cfg.Protocol, cfg.Port)
+	return &cfg, true
+}
+
+func (i instances) checkProxyConnectivity(inst *instance_model.Instance) (string, *int64, string) {
+	cfg, ok := i.effectiveProxyConfig(inst)
+	if !ok {
+		return "inactive", nil, ""
+	}
+
+	timeout := time.Duration(3000) * time.Millisecond
+	if i.config != nil && i.config.ProxyHealthTimeoutMs > 0 {
+		timeout = time.Duration(i.config.ProxyHealthTimeoutMs) * time.Millisecond
+	}
+
+	maxLat := int64(1500)
+	if i.config != nil && i.config.ProxyHealthMaxLatMs > 0 {
+		maxLat = int64(i.config.ProxyHealthMaxLatMs)
+	}
+
+	dialer := &net.Dialer{Timeout: timeout}
+	start := time.Now()
+	conn, err := dialer.Dial("tcp", net.JoinHostPort(strings.TrimSpace(cfg.Host), strings.TrimSpace(cfg.Port)))
+	if err != nil {
+		return "error", nil, err.Error()
+	}
+	defer conn.Close()
+
+	latMs := int64(time.Since(start) / time.Millisecond)
+	latency := &latMs
+
+	_ = conn.SetDeadline(time.Now().Add(timeout))
+
+	switch cfg.Protocol {
+	case "socks5":
+		if err := socks5Handshake(conn, cfg.Username, cfg.Password); err != nil {
+			return "error", latency, err.Error()
+		}
+	default:
+		testURL := "http://example.invalid/"
+		if i.config != nil && strings.TrimSpace(i.config.ProxyHealthHttpUrl) != "" {
+			testURL = i.config.ProxyHealthHttpUrl
+		}
+		if err := httpProxyHandshake(conn, cfg.Username, cfg.Password, testURL); err != nil {
+			return "error", latency, err.Error()
+		}
+	}
+
+	if latMs > maxLat {
+		return "slow", latency, ""
+	}
+	return "active", latency, ""
+}
+
+func socks5Handshake(conn net.Conn, username, password string) error {
+	method := byte(0x00)
+	if strings.TrimSpace(username) != "" {
+		method = byte(0x02)
+	}
+
+	_, err := conn.Write([]byte{0x05, 0x01, method})
+	if err != nil {
+		return err
+	}
+
+	resp := make([]byte, 2)
+	_, err = io.ReadFull(conn, resp)
+	if err != nil {
+		return err
+	}
+
+	if resp[0] != 0x05 {
+		return fmt.Errorf("invalid socks5 response")
+	}
+	if resp[1] == 0xFF {
+		return fmt.Errorf("socks5: no acceptable auth method")
+	}
+
+	if resp[1] == 0x02 {
+		u := []byte(username)
+		p := []byte(password)
+		if len(u) > 255 || len(p) > 255 {
+			return fmt.Errorf("socks5: credentials too long")
+		}
+		req := make([]byte, 0, 3+len(u)+len(p))
+		req = append(req, 0x01, byte(len(u)))
+		req = append(req, u...)
+		req = append(req, byte(len(p)))
+		req = append(req, p...)
+
+		_, err = conn.Write(req)
+		if err != nil {
+			return err
+		}
+
+		authResp := make([]byte, 2)
+		_, err = io.ReadFull(conn, authResp)
+		if err != nil {
+			return err
+		}
+		if authResp[1] != 0x00 {
+			return fmt.Errorf("socks5: authentication failed")
+		}
+	}
+
+	return nil
+}
+
+func httpProxyHandshake(conn net.Conn, username, password, testURL string) error {
+	u, err := url.Parse(testURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		u, _ = url.Parse("http://example.invalid/")
+	}
+
+	hostHeader := u.Host
+
+	var b strings.Builder
+	b.WriteString("HEAD ")
+	b.WriteString(u.String())
+	b.WriteString(" HTTP/1.1\r\n")
+	b.WriteString("Host: ")
+	b.WriteString(hostHeader)
+	b.WriteString("\r\n")
+	b.WriteString("Connection: close\r\n")
+
+	if strings.TrimSpace(username) != "" {
+		cred := username + ":" + password
+		b.WriteString("Proxy-Authorization: Basic ")
+		b.WriteString(base64.StdEncoding.EncodeToString([]byte(cred)))
+		b.WriteString("\r\n")
+	}
+	b.WriteString("\r\n")
+
+	_, err = conn.Write([]byte(b.String()))
+	if err != nil {
+		return err
+	}
+
+	reader := bufio.NewReader(conn)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "HTTP/") {
+		return fmt.Errorf("invalid http proxy response")
+	}
+
+	parts := strings.Split(line, " ")
+	if len(parts) < 2 {
+		return fmt.Errorf("invalid http proxy response")
+	}
+	code := parts[1]
+
+	if code == "407" && strings.TrimSpace(username) != "" {
+		return fmt.Errorf("proxy authentication failed (HTTP 407)")
+	}
+
+	return nil
+}
 func (i *instances) ensureClientConnected(instanceId string) (*whatsmeow.Client, error) {
 	logger := i.loggerWrapper.GetLogger(instanceId)
 	client := i.clientPointer[instanceId]

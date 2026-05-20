@@ -23,6 +23,10 @@ type Instance struct {
 	Events           string    `json:"events"`
 	OsName           string    `json:"os_name"`
 	Proxy            string    `json:"proxy"`
+	ProxyStatus      string    `json:"proxy_status" gorm:"default:'inactive'"`
+	ProxyLastCheck   *time.Time `json:"proxy_last_check"`
+	ProxyLatencyMs   *int64    `json:"proxy_latency_ms"`
+	ProxyError       string    `json:"proxy_error" gorm:"type:text"`
 	ClientName       string    `json:"client_name"`
 	CreatedAt        time.Time `json:"createdAt" gorm:"autoCreateTime"`
 

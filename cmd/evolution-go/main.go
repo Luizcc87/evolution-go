@@ -81,7 +81,7 @@ func init() {
 	}
 }
 
-func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.Config, conn *amqp.Connection, exPath string, runtimeCtx *core.RuntimeContext) *gin.Engine {
+func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.Config, conn *amqp.Connection, exPath string, runtimeCtx *core.RuntimeContext) (*gin.Engine, instance_service.InstanceService) {
 	killChannel := make(map[string](chan bool))
 	clientPointer := make(map[string]*whatsmeow.Client)
 
@@ -253,7 +253,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		websocket_producer.ServeWs(c.Writer, c.Request, instanceId, websocketProducer)
 	})
 
-	return r
+	return r, instanceService
 }
 
 func migrate(db *gorm.DB) {
@@ -400,13 +400,14 @@ func main() {
 		logger.LogInfo("RabbitMQ URL not configured, skipping RabbitMQ connection")
 	}
 
-	r := setupRouter(db, authDB, sqliteDB, cfg, conn, exPath, runtimeCtx)
+	r, instanceService := setupRouter(db, authDB, sqliteDB, cfg, conn, exPath, runtimeCtx)
 
 	// Graceful shutdown with heartbeat
 	heartbeatCtx, heartbeatCancel := context.WithCancel(context.Background())
 	defer heartbeatCancel()
 
 	core.StartHeartbeat(heartbeatCtx, runtimeCtx, startTime)
+	instanceService.StartProxyHealthMonitor(heartbeatCtx)
 
 	srv := &http.Server{
 		Addr:    ":" + os.Getenv("SERVER_PORT"),

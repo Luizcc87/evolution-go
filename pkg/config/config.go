@@ -52,6 +52,11 @@ type Config struct {
 	ProxyPort            string
 	ProxyUsername        string
 	ProxyPassword        string
+	ProxyHealthEnabled   bool
+	ProxyHealthIntervalS int
+	ProxyHealthTimeoutMs int
+	ProxyHealthMaxLatMs  int
+	ProxyHealthHttpUrl   string
 	AmqpGlobalEvents     []string
 	AmqpSpecificEvents   []string
 	NatsUrl              string
@@ -272,6 +277,27 @@ func Load() *Config {
 	proxyUsername := os.Getenv(config_env.PROXY_USERNAME)
 	proxyPassword := os.Getenv(config_env.PROXY_PASSWORD)
 
+	proxyHealthEnabledStr := os.Getenv(config_env.PROXY_HEALTH_ENABLED)
+	if proxyHealthEnabledStr == "" {
+		proxyHealthEnabledStr = "false"
+	}
+	proxyHealthIntervalStr := os.Getenv(config_env.PROXY_HEALTH_INTERVAL_S)
+	if proxyHealthIntervalStr == "" {
+		proxyHealthIntervalStr = "60"
+	}
+	proxyHealthTimeoutStr := os.Getenv(config_env.PROXY_HEALTH_TIMEOUT_MS)
+	if proxyHealthTimeoutStr == "" {
+		proxyHealthTimeoutStr = "3000"
+	}
+	proxyHealthMaxLatStr := os.Getenv(config_env.PROXY_HEALTH_MAX_LAT_MS)
+	if proxyHealthMaxLatStr == "" {
+		proxyHealthMaxLatStr = "1500"
+	}
+	proxyHealthHttpUrl := os.Getenv(config_env.PROXY_HEALTH_HTTP_URL)
+	if proxyHealthHttpUrl == "" {
+		proxyHealthHttpUrl = "http://example.invalid/"
+	}
+
 	eventIgnoreGroup := os.Getenv(config_env.EVENT_IGNORE_GROUP)
 	eventIgnoreStatus := os.Getenv(config_env.EVENT_IGNORE_STATUS)
 	qrcodeMaxCount := os.Getenv(config_env.QRCODE_MAX_COUNT)
@@ -343,6 +369,19 @@ func Load() *Config {
 		logCompress = true // Default compression enabled
 	}
 
+	proxyHealthIntervalS, _ := strconv.Atoi(proxyHealthIntervalStr)
+	if proxyHealthIntervalS <= 0 {
+		proxyHealthIntervalS = 60
+	}
+	proxyHealthTimeoutMs, _ := strconv.Atoi(proxyHealthTimeoutStr)
+	if proxyHealthTimeoutMs <= 0 {
+		proxyHealthTimeoutMs = 3000
+	}
+	proxyHealthMaxLatMs, _ := strconv.Atoi(proxyHealthMaxLatStr)
+	if proxyHealthMaxLatMs <= 0 {
+		proxyHealthMaxLatMs = 1500
+	}
+
 	config := &Config{
 		PostgresAuthDB:       postgresAuthDB,
 		postgresUsersDB:      postgresUsersDB,
@@ -372,6 +411,11 @@ func Load() *Config {
 		ProxyPort:            proxyPort,
 		ProxyUsername:        proxyUsername,
 		ProxyPassword:        proxyPassword,
+		ProxyHealthEnabled:   proxyHealthEnabledStr == "true",
+		ProxyHealthIntervalS: proxyHealthIntervalS,
+		ProxyHealthTimeoutMs: proxyHealthTimeoutMs,
+		ProxyHealthMaxLatMs:  proxyHealthMaxLatMs,
+		ProxyHealthHttpUrl:   proxyHealthHttpUrl,
 		EventIgnoreGroup:     eventIgnoreGroup == "true",
 		EventIgnoreStatus:    eventIgnoreStatus == "true",
 		QrcodeMaxCount:       qrMaxCount,

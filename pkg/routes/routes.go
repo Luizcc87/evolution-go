@@ -87,6 +87,8 @@ func (r *Routes) AssignRoutes(eng *gin.Engine) {
 			routes.DELETE("/delete/:instanceId", r.instanceHandler.Delete)
 			routes.POST("/proxy/:instanceId", r.instanceHandler.SetProxy)
 			routes.DELETE("/proxy/:instanceId", r.instanceHandler.DeleteProxy)
+			routes.GET("/proxy/status/:instanceId", r.instanceHandler.ProxyStatusAdmin)
+			routes.GET("/proxy/status/all", r.instanceHandler.ProxyStatusAllAdmin)
 			routes.POST("/forcereconnect/:instanceId", r.instanceHandler.ForceReconnect)
 			routes.GET("/logs/:instanceId", r.instanceHandler.GetLogs)
 		}
@@ -98,6 +100,7 @@ func (r *Routes) AssignRoutes(eng *gin.Engine) {
 		{
 			routes.POST("/connect", r.instanceHandler.Connect)
 			routes.GET("/status", r.instanceHandler.Status)
+			routes.GET("/proxy/status", r.instanceHandler.ProxyStatus)
 			routes.GET("/qr", r.instanceHandler.Qr)
 			routes.POST("/pair", r.jidValidationMiddleware.ValidateNumberField(), r.instanceHandler.Pair)
 			routes.POST("/disconnect", r.instanceHandler.Disconnect)

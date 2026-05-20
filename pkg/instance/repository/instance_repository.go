@@ -2,6 +2,7 @@ package instance_repository
 
 import (
 	"fmt"
+	"time"
 
 	instance_model "github.com/EvolutionAPI/evolution-go/pkg/instance/model"
 	"github.com/gomessguii/logger"
@@ -25,6 +26,7 @@ type InstanceRepository interface {
 	UpdateConnected(userId string, status bool, disconnectReason string) error
 	UpdateQrcode(userId string, qr string) error
 	UpdateProxy(userId string, proxy string) error
+	UpdateProxyHealth(instanceId string, status string, lastCheck *time.Time, latencyMs *int64, errMsg string) error
 	UpdateJid(userId string, jid string) error
 	GetAllConnectedInstances() ([]*instance_model.Instance, error)
 	GetAllConnectedInstancesByClientName(clientName string) ([]*instance_model.Instance, error)
@@ -110,6 +112,16 @@ func (i *instanceRepository) UpdateQrcode(userId string, qr string) error {
 
 func (i *instanceRepository) UpdateProxy(userId string, proxy string) error {
 	return i.db.Model(&instance_model.Instance{}).Where("id = ?", userId).Update("proxy", proxy).Error
+}
+
+func (i *instanceRepository) UpdateProxyHealth(instanceId string, status string, lastCheck *time.Time, latencyMs *int64, errMsg string) error {
+	updates := map[string]interface{}{
+		"proxy_status":     status,
+		"proxy_last_check": lastCheck,
+		"proxy_latency_ms": latencyMs,
+		"proxy_error":      errMsg,
+	}
+	return i.db.Model(&instance_model.Instance{}).Where("id = ?", instanceId).Updates(updates).Error
 }
 
 func (i *instanceRepository) UpdateJid(userId string, jid string) error {
