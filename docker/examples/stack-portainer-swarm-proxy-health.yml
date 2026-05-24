@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  evolution_go:
+    image: evoapicloud/evolution-go:latest
+    networks:
+      - network_swarm_public
+    environment:
+      SERVER_PORT: 4000
+      CLIENT_NAME: "evolution"
+      GLOBAL_API_KEY: "sua-chave-api-segura-aqui"
+
+      POSTGRES_AUTH_DB: "postgresql://postgres:senha@postgres:5432/evogo_auth?sslmode=disable"
+      POSTGRES_USERS_DB: "postgresql://postgres:senha@postgres:5432/evogo_users?sslmode=disable"
+      DATABASE_SAVE_MESSAGES: "false"
+
+      WADEBUG: "INFO"
+      LOGTYPE: "console"
+
+      CONNECT_ON_STARTUP: "true"
+      WEBHOOK_FILES: "true"
+
+      OS_NAME: "Linux"
+
+      PROXY_HOST: ""
+      PROXY_PORT: ""
+      PROXY_USERNAME: ""
+      PROXY_PASSWORD: ""
+
+      PROXY_HEALTH_ENABLED: "true"
+      PROXY_HEALTH_INTERVAL_S: "60"
+      PROXY_HEALTH_TIMEOUT_MS: "3000"
+      PROXY_HEALTH_MAX_LAT_MS: "1500"
+      PROXY_HEALTH_HTTP_URL: "http://example.invalid/"
+
+      EVENT_IGNORE_GROUP: "false"
+      EVENT_IGNORE_STATUS: "true"
+
+    volumes:
+      - evolution_go_data:/app/dbdata
+      - evolution_go_logs:/app/logs
+
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+
+volumes:
+  evolution_go_data:
+    external: true
+    name: evolution_go_data
+  evolution_go_logs:
+    external: true
+    name: evolution_go_logs
+
+networks:
+  network_swarm_public:
+    external: true
+    name: network_swarm_public
+

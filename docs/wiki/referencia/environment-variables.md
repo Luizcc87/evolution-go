@@ -154,6 +154,29 @@ PROXY_PASSWORD=senha
 
 ---
 
+## Proxy Health (Logs + Status)
+
+Variáveis para habilitar monitoramento periódico de conectividade do proxy e registrar status nos logs do container (linhas com prefixo `[proxy-health]`).
+
+| Variável | Padrão | Descrição |
+|----------|--------|-----------|
+| `PROXY_HEALTH_ENABLED` | `false` | Habilita o monitor de proxy health |
+| `PROXY_HEALTH_INTERVAL_S` | `60` | Intervalo do monitor em segundos |
+| `PROXY_HEALTH_TIMEOUT_MS` | `3000` | Timeout de conexão/handshake em ms |
+| `PROXY_HEALTH_MAX_LAT_MS` | `1500` | Limite de latência (ms) para classificar como `slow` |
+| `PROXY_HEALTH_HTTP_URL` | `http://example.invalid/` | URL de teste usada em proxies HTTP |
+
+**Exemplo:**
+```env
+PROXY_HEALTH_ENABLED=true
+PROXY_HEALTH_INTERVAL_S=60
+PROXY_HEALTH_TIMEOUT_MS=3000
+PROXY_HEALTH_MAX_LAT_MS=1500
+PROXY_HEALTH_HTTP_URL=http://example.invalid/
+```
+
+---
+
 ## Recursos Adicionais
 
 | Variável | Descrição |
