@@ -6,33 +6,55 @@ services:
     networks:
       - network_swarm_public
     environment:
+      # Porta HTTP do Evolution GO dentro do container
       SERVER_PORT: 4000
+
+      # Identificador do "cliente" (útil para separar instâncias/ambientes)
       CLIENT_NAME: "evolution"
+
+      # Chave admin para chamadas autenticadas (NÃO exponha publicamente)
       GLOBAL_API_KEY: "sua-chave-api-segura-aqui"
 
+      # Banco (auth e users) - strings de conexão PostgreSQL
       POSTGRES_AUTH_DB: "postgresql://postgres:senha@postgres:5432/evogo_auth?sslmode=disable"
       POSTGRES_USERS_DB: "postgresql://postgres:senha@postgres:5432/evogo_users?sslmode=disable"
+
+      # Persistência de mensagens (false reduz carga/armazenamento)
       DATABASE_SAVE_MESSAGES: "false"
 
+      # Logs no stdout do container (Portainer/Docker Logs)
       WADEBUG: "INFO"
       LOGTYPE: "console"
 
+      # Conectar instâncias automaticamente no boot
       CONNECT_ON_STARTUP: "true"
       WEBHOOK_FILES: "true"
 
+      # Metadado do dispositivo/sistema reportado pelo cliente
       OS_NAME: "Linux"
 
+      # Proxy padrão (opcional): usado quando a instância não tiver proxy próprio configurado
       PROXY_HOST: ""
       PROXY_PORT: ""
       PROXY_USERNAME: ""
       PROXY_PASSWORD: ""
 
+      # Proxy Health: habilita logs periódicos de status do proxy por instância (prefixo [proxy-health])
       PROXY_HEALTH_ENABLED: "true"
+
+      # Intervalo do monitor (segundos)
       PROXY_HEALTH_INTERVAL_S: "60"
+
+      # Timeout de conexão/handshake com o proxy (ms)
       PROXY_HEALTH_TIMEOUT_MS: "3000"
+
+      # Acima desse valor (ms), o status vira "slow"
       PROXY_HEALTH_MAX_LAT_MS: "1500"
+
+      # URL leve para teste em proxies HTTP (deve ser acessível via proxy e responder rápido)
       PROXY_HEALTH_HTTP_URL: "http://example.invalid/"
 
+      # Filtros de eventos (reduz volume)
       EVENT_IGNORE_GROUP: "false"
       EVENT_IGNORE_STATUS: "true"
 
@@ -62,4 +84,3 @@ networks:
   network_swarm_public:
     external: true
     name: network_swarm_public
-
