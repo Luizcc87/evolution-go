@@ -257,6 +257,9 @@ func (i instances) proxyHealthFromInstance(inst *instance_model.Instance) *Proxy
 	if status == "" {
 		status = "inactive"
 	}
+	if proxyAddress != "" && status == "inactive" && inst.ProxyLastCheck == nil {
+		status = "configured"
+	}
 
 	threshold := 1500
 	if i.config != nil && i.config.ProxyHealthMaxLatMs > 0 {
@@ -946,6 +949,9 @@ func (i instances) SetProxy(id string, proxyConfig *ProxyConfig) error {
 		i.loggerWrapper.GetLogger(id).LogError("[%s] Failed to update instance with proxy: %v", id, err)
 		return err
 	}
+	if err := i.instanceRepository.UpdateProxyHealth(id, "configured", nil, nil, ""); err != nil {
+		i.loggerWrapper.GetLogger(id).LogWarn("[%s] Failed to update proxy status: %v", id, err)
+	}
 
 	i.loggerWrapper.GetLogger(id).LogInfo("[%s] Proxy configuration updated: %s://%s:%s", id, proxyConfig.Protocol, proxyConfig.Host, proxyConfig.Port)
 
@@ -982,6 +988,9 @@ func (i instances) RemoveProxy(id string) error {
 	err = i.instanceRepository.Update(instance)
 	if err != nil {
 		return err
+	}
+	if err := i.instanceRepository.UpdateProxyHealth(id, "inactive", nil, nil, ""); err != nil {
+		i.loggerWrapper.GetLogger(id).LogWarn("[%s] Failed to update proxy status: %v", id, err)
 	}
 
 	i.loggerWrapper.GetLogger(id).LogInfo("[%s] Proxy configuration removed", id)
