@@ -260,6 +260,9 @@ func (i instances) proxyHealthFromInstance(inst *instance_model.Instance) *Proxy
 	if status == "" {
 		status = "inactive"
 	}
+	if proxyAddress != "" && inst.Connected && (status == "inactive" || status == "configured") {
+		status = "connected"
+	}
 	if proxyAddress != "" && status == "inactive" && inst.ProxyLastCheck == nil {
 		status = "configured"
 	}
