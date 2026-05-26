@@ -122,13 +122,15 @@ type ForceReconnectStruct struct {
 }
 
 type ProxyHealth struct {
-	InstanceId   string     `json:"instanceId"`
-	ProxyAddress string     `json:"proxyAddress"`
-	Status       string     `json:"status"`
-	LastCheck    *time.Time `json:"lastCheck,omitempty"`
-	LatencyMs    *int64     `json:"latencyMs,omitempty"`
-	Error        string     `json:"error,omitempty"`
-	ThresholdMs  int        `json:"thresholdMs"`
+	InstanceId    string     `json:"instanceId"`
+	ProxyAddress  string     `json:"proxyAddress"`
+	ProxyUsername string     `json:"proxyUsername,omitempty"`
+	HasAuth       bool       `json:"hasAuth"`
+	Status        string     `json:"status"`
+	LastCheck     *time.Time `json:"lastCheck,omitempty"`
+	LatencyMs     *int64     `json:"latencyMs,omitempty"`
+	Error         string     `json:"error,omitempty"`
+	ThresholdMs   int        `json:"thresholdMs"`
 }
 
 func (i instances) StartProxyHealthMonitor(ctx context.Context) {
@@ -252,6 +254,7 @@ func (i instances) GetProxyHealthAll() ([]*ProxyHealth, error) {
 
 func (i instances) proxyHealthFromInstance(inst *instance_model.Instance) *ProxyHealth {
 	proxyAddress := i.proxyDisplayAddress(inst)
+	proxyConfig, hasProxy := i.effectiveProxyConfig(inst)
 
 	status := strings.TrimSpace(inst.ProxyStatus)
 	if status == "" {
@@ -267,14 +270,30 @@ func (i instances) proxyHealthFromInstance(inst *instance_model.Instance) *Proxy
 	}
 
 	return &ProxyHealth{
-		InstanceId:   inst.Id,
-		ProxyAddress: proxyAddress,
-		Status:       status,
-		LastCheck:    inst.ProxyLastCheck,
-		LatencyMs:    inst.ProxyLatencyMs,
-		Error:        strings.TrimSpace(inst.ProxyError),
-		ThresholdMs:  threshold,
+		InstanceId:    inst.Id,
+		ProxyAddress:  proxyAddress,
+		ProxyUsername: proxyHealthUsername(proxyConfig, hasProxy),
+		HasAuth:       proxyHasAuth(proxyConfig, hasProxy),
+		Status:        status,
+		LastCheck:     inst.ProxyLastCheck,
+		LatencyMs:     inst.ProxyLatencyMs,
+		Error:         strings.TrimSpace(inst.ProxyError),
+		ThresholdMs:   threshold,
 	}
+}
+
+func proxyHealthUsername(proxyConfig *ProxyConfig, hasProxy bool) string {
+	if !hasProxy || proxyConfig == nil {
+		return ""
+	}
+	return strings.TrimSpace(proxyConfig.Username)
+}
+
+func proxyHasAuth(proxyConfig *ProxyConfig, hasProxy bool) bool {
+	if !hasProxy || proxyConfig == nil {
+		return false
+	}
+	return strings.TrimSpace(proxyConfig.Username) != "" || strings.TrimSpace(proxyConfig.Password) != ""
 }
 
 func (i instances) proxyDisplayAddress(inst *instance_model.Instance) string {
