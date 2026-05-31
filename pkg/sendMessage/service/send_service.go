@@ -27,6 +27,7 @@ import (
 	"github.com/chai2010/webp"
 	"github.com/gabriel-vasile/mimetype"
 	"go.mau.fi/whatsmeow"
+	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"golang.org/x/net/html"
@@ -43,6 +44,7 @@ type SendService interface {
 	SendLocation(data *LocationStruct, instance *instance_model.Instance) (*MessageSendStruct, error)
 	SendContact(data *ContactStruct, instance *instance_model.Instance) (*MessageSendStruct, error)
 	SendButton(data *ButtonStruct, instance *instance_model.Instance) (*MessageSendStruct, error)
+	SendPix(data *PixStruct, instance *instance_model.Instance) (*MessageSendStruct, error)
 	SendList(data *ListStruct, instance *instance_model.Instance) (*MessageSendStruct, error)
 	SendCarousel(data *CarouselStruct, instance *instance_model.Instance) (*MessageSendStruct, error)
 	SendStatusText(data *StatusTextStruct, instance *instance_model.Instance) (*MessageSendStruct, error)
@@ -66,6 +68,7 @@ type SendDataStruct struct {
 	FormatJid    *bool
 	Quoted       QuotedStruct
 	MediaHandle  string
+	NativeFlow   string
 }
 
 type QuotedStruct struct {
@@ -169,27 +172,38 @@ type ContactStruct struct {
 //   - url:   uses `displayText` + `url`
 //   - call:  uses `displayText` + `phoneNumber`
 //   - pix:   uses `currency` + `name` + `keyType` + `key` (must be sent alone)
+//   - review_and_pay: uses `displayText` + payment fields + `items` (must be sent alone)
+type ButtonItem struct {
+	Name       string `json:"name" example:"Produto A"`
+	Amount     int64  `json:"amount" example:"5000"`
+	Quantity   int32  `json:"quantity" example:"2"`
+	RetailerID string `json:"retailerId,omitempty" example:"SKU-001"`
+	ProductID  string `json:"productId,omitempty" example:"SKU-001"`
+}
+
 type Button struct {
-	// Button kind. One of: reply, copy, url, call, pix.
-	Type        string `json:"type" enums:"reply,copy,url,call,pix" example:"reply"`
+	// Button kind. One of: reply, copy, url, call, pix, review_and_pay.
+	Type string `json:"type" enums:"reply,copy,url,call,pix,review_and_pay" example:"reply"`
 	// Label rendered inside the button (reply / copy / url / call). Ignored for pix.
 	DisplayText string `json:"displayText" example:"Quero saber mais"`
 	// Callback payload for `reply` or code-to-copy internal id for `copy`.
-	Id          string `json:"id" example:"btn_info"`
+	Id string `json:"id" example:"btn_info"`
 	// Code placed in the clipboard when type=copy.
-	CopyCode    string `json:"copyCode,omitempty" example:"PROMO2026"`
+	CopyCode string `json:"copyCode,omitempty" example:"PROMO2026"`
 	// Target URL when type=url.
-	URL         string `json:"url,omitempty" example:"https://evolutionapi.com"`
+	URL string `json:"url,omitempty" example:"https://evolutionapi.com"`
 	// Destination phone number (E.164) when type=call.
 	PhoneNumber string `json:"phoneNumber,omitempty" example:"+5582988898565"`
 	// ISO currency code for type=pix (e.g. BRL).
-	Currency    string `json:"currency,omitempty" example:"BRL"`
+	Currency string `json:"currency,omitempty" example:"BRL"`
 	// Merchant display name shown on the Pix sheet.
-	Name        string `json:"name,omitempty" example:"Minha Loja"`
+	Name string `json:"name,omitempty" example:"Minha Loja"`
 	// Pix key type. One of: phone, email, cpf, cnpj, random.
-	KeyType     string `json:"keyType,omitempty" enums:"phone,email,cpf,cnpj,random" example:"cpf"`
+	KeyType string `json:"keyType,omitempty" enums:"phone,email,cpf,cnpj,random" example:"cpf"`
 	// Pix key value matching the keyType.
-	Key         string `json:"key,omitempty" example:"12345678900"`
+	Key string `json:"key,omitempty" example:"12345678900"`
+	// Items used by review_and_pay.
+	Items []ButtonItem `json:"items,omitempty"`
 }
 
 // ButtonStruct is the body for POST /send/button.
@@ -204,35 +218,55 @@ type Button struct {
 //   - safe combinations: only-reply (up to 3) OR grouped CTAs (copy + url + call).
 type ButtonStruct struct {
 	// Destination phone number.
-	Number       string       `json:"number" example:"5582988898565"`
+	Number string `json:"number" example:"5582988898565"`
 	// Header title (required).
-	Title        string       `json:"title" example:"Oferta especial"`
+	Title string `json:"title" example:"Oferta especial"`
 	// Body description text (required).
-	Description  string       `json:"description" example:"Confira as condicoes abaixo"`
+	Description string `json:"description" example:"Confira as condicoes abaixo"`
 	// Footer text (required).
-	Footer       string       `json:"footer" example:"Evolution GO"`
+	Footer string `json:"footer" example:"Evolution GO"`
+	// Optional public image URL for the header.
+	ImageURL string `json:"imageUrl,omitempty" example:"https://picsum.photos/seed/button/600/400"`
+	// Optional public video URL for the header. Used only when `imageUrl` is empty.
+	VideoURL string `json:"videoUrl,omitempty"`
 	// Buttons array. See combination rules on the parent type description.
-	Buttons      []Button     `json:"buttons"`
+	Buttons []Button `json:"buttons"`
 	// Typing delay (milliseconds) applied before sending the message.
-	Delay        int32        `json:"delay,omitempty" example:"1200"`
+	Delay int32 `json:"delay,omitempty" example:"1200"`
 	// JIDs to mention inside the body text.
-	MentionedJID []string     `json:"mentionedJid,omitempty"`
+	MentionedJID []string `json:"mentionedJid,omitempty"`
 	// Mention every participant (groups only).
-	MentionAll   bool         `json:"mentionAll,omitempty"`
+	MentionAll bool `json:"mentionAll,omitempty"`
 	// If false, skips automatic formatting/validation of `number` into a JID.
-	FormatJid    *bool        `json:"formatJid,omitempty"`
+	FormatJid *bool `json:"formatJid,omitempty"`
 	// Quoted (reply-to) context.
+	Quoted QuotedStruct `json:"quoted,omitempty"`
+}
+
+// PixStruct is the body for POST /send/pix.
+type PixStruct struct {
+	Number       string       `json:"number" example:"5582988898565"`
+	HeaderTitle  string       `json:"headerTitle" example:"Pagamento PIX"`
+	BodyText     string       `json:"bodyText" example:"Realize o pagamento via PIX usando o botao abaixo"`
+	FooterText   string       `json:"footerText,omitempty" example:"Pagamento seguro via PIX"`
+	MerchantName string       `json:"merchantName" example:"Minha Loja LTDA"`
+	PixKey       string       `json:"pixKey" example:"12345678900"`
+	KeyType      string       `json:"keyType" enums:"CPF,CNPJ,EMAIL,PHONE,EVP,cpf,cnpj,email,phone,evp,random" example:"CPF"`
+	Delay        int32        `json:"delay,omitempty" example:"1200"`
+	MentionedJID []string     `json:"mentionedJid,omitempty"`
+	MentionAll   bool         `json:"mentionAll,omitempty"`
+	FormatJid    *bool        `json:"formatJid,omitempty"`
 	Quoted       QuotedStruct `json:"quoted,omitempty"`
 }
 
 // Row is a selectable item inside a list Section.
 type Row struct {
 	// Row main label.
-	Title       string `json:"title" example:"Plano Basico"`
+	Title string `json:"title" example:"Plano Basico"`
 	// Optional secondary line below the title.
 	Description string `json:"description,omitempty" example:"R$ 29,90/mes"`
 	// Callback payload returned when the user taps the row. Auto-generated if empty.
-	RowId       string `json:"rowId,omitempty" example:"plan_basic"`
+	RowId string `json:"rowId,omitempty" example:"plan_basic"`
 }
 
 // Section groups related Rows under an optional title.
@@ -240,7 +274,7 @@ type Section struct {
 	// Section heading (optional; rendered as a group separator).
 	Title string `json:"title,omitempty" example:"Planos"`
 	// Rows inside this section.
-	Rows  []Row  `json:"rows"`
+	Rows []Row `json:"rows"`
 }
 
 // ListStruct is the body for POST /send/list.
@@ -248,27 +282,27 @@ type Section struct {
 // Renders as a single-select menu (legacy ListMessage format — compatible with iOS, Android and WhatsApp Web).
 type ListStruct struct {
 	// Destination phone number.
-	Number       string       `json:"number" example:"5582988898565"`
+	Number string `json:"number" example:"5582988898565"`
 	// Header title (required).
-	Title        string       `json:"title" example:"Nossos planos"`
+	Title string `json:"title" example:"Nossos planos"`
 	// Body description text (required).
-	Description  string       `json:"description" example:"Escolha o plano ideal para voce"`
+	Description string `json:"description" example:"Escolha o plano ideal para voce"`
 	// Label of the button that opens the list. Defaults to "Ver Menu" when empty.
-	ButtonText   string       `json:"buttonText" example:"Abrir cardapio"`
+	ButtonText string `json:"buttonText" example:"Abrir cardapio"`
 	// Footer text (required).
-	FooterText   string       `json:"footerText" example:"Evolution GO"`
+	FooterText string `json:"footerText" example:"Evolution GO"`
 	// Sections with rows. At least one section with one row is required.
-	Sections     []Section    `json:"sections"`
+	Sections []Section `json:"sections"`
 	// Typing delay (milliseconds) applied before sending the message.
-	Delay        int32        `json:"delay,omitempty" example:"1200"`
+	Delay int32 `json:"delay,omitempty" example:"1200"`
 	// JIDs to mention inside the body text.
-	MentionedJID []string     `json:"mentionedJid,omitempty"`
+	MentionedJID []string `json:"mentionedJid,omitempty"`
 	// Mention every participant (groups only).
-	MentionAll   bool         `json:"mentionAll,omitempty"`
+	MentionAll bool `json:"mentionAll,omitempty"`
 	// If false, skips automatic formatting/validation of `number` into a JID.
-	FormatJid    *bool        `json:"formatJid,omitempty"`
+	FormatJid *bool `json:"formatJid,omitempty"`
 	// Quoted (reply-to) context.
-	Quoted       QuotedStruct `json:"quoted,omitempty"`
+	Quoted QuotedStruct `json:"quoted,omitempty"`
 }
 
 // CarouselButtonStruct is a button attached to a single carousel card.
@@ -289,20 +323,20 @@ type ListStruct struct {
 // mixed sets do not render on WhatsApp Web. Prefer only-REPLY or only-CTAs per card.
 type CarouselButtonStruct struct {
 	// Button kind (case-insensitive). One of: REPLY (default), URL, CALL, COPY.
-	Type        string `json:"type" enums:"REPLY,URL,CALL,COPY,reply,url,call,copy" example:"REPLY"`
+	Type string `json:"type" enums:"REPLY,URL,CALL,COPY,reply,url,call,copy" example:"REPLY"`
 	// Label rendered inside the button.
 	DisplayText string `json:"displayText" example:"Quero saber mais"`
 	// Context-dependent: REPLY payload, URL target (type=URL) or phone number (type=CALL).
-	Id          string `json:"id" example:"card1_info"`
+	Id string `json:"id" example:"card1_info"`
 	// Code placed in the clipboard when type=COPY.
-	CopyCode    string `json:"copyCode,omitempty" example:"PROMO2026"`
+	CopyCode string `json:"copyCode,omitempty" example:"PROMO2026"`
 }
 
 // CarouselCardHeaderStruct is the top area of a carousel card.
 // Either `imageUrl` OR `videoUrl` may be provided (image takes precedence when both are set).
 type CarouselCardHeaderStruct struct {
 	// Optional visible title above the media.
-	Title    string `json:"title,omitempty" example:"Oferta do dia"`
+	Title string `json:"title,omitempty" example:"Oferta do dia"`
 	// Optional subtitle rendered below the title.
 	Subtitle string `json:"subtitle,omitempty" example:"Somente hoje"`
 	// Public URL to an image. Downloaded, uploaded to WhatsApp servers and used as card media.
@@ -321,13 +355,13 @@ type CarouselCardBodyStruct struct {
 // Each card requires at least `header` + `body`.
 type CarouselCardStruct struct {
 	// Card header (media + title/subtitle).
-	Header  CarouselCardHeaderStruct `json:"header"`
+	Header CarouselCardHeaderStruct `json:"header"`
 	// Card body text (required).
-	Body    CarouselCardBodyStruct   `json:"body"`
+	Body CarouselCardBodyStruct `json:"body"`
 	// Optional footer rendered under the body.
-	Footer  string                   `json:"footer,omitempty" example:"Por tempo limitado"`
+	Footer string `json:"footer,omitempty" example:"Por tempo limitado"`
 	// Buttons shown on the card. See CarouselButtonStruct for combination rules.
-	Buttons []CarouselButtonStruct   `json:"buttons,omitempty"`
+	Buttons []CarouselButtonStruct `json:"buttons,omitempty"`
 }
 
 // CarouselStruct is the body for POST /send/carousel.
@@ -336,19 +370,19 @@ type CarouselCardStruct struct {
 // Each card must have `header` + `body`; button rules are described on CarouselButtonStruct.
 type CarouselStruct struct {
 	// Destination phone number.
-	Number    string               `json:"number" example:"5582988898565"`
+	Number string `json:"number" example:"5582988898565"`
 	// Optional message body shown above the cards.
-	Body      string               `json:"body,omitempty" example:"Confira nossas novidades!"`
+	Body string `json:"body,omitempty" example:"Confira nossas novidades!"`
 	// Optional message footer shown below the cards.
-	Footer    string               `json:"footer,omitempty" example:"Evolution GO"`
+	Footer string `json:"footer,omitempty" example:"Evolution GO"`
 	// Typing delay (milliseconds) applied before sending the message.
-	Delay     int32                `json:"delay,omitempty" example:"1200"`
+	Delay int32 `json:"delay,omitempty" example:"1200"`
 	// If false, skips automatic formatting/validation of `number` into a JID.
-	FormatJid *bool                `json:"formatJid,omitempty"`
+	FormatJid *bool `json:"formatJid,omitempty"`
 	// Quoted (reply-to) context.
-	Quoted    QuotedStruct         `json:"quoted,omitempty"`
+	Quoted QuotedStruct `json:"quoted,omitempty"`
 	// Cards displayed in order. At least one card is required.
-	Cards     []CarouselCardStruct `json:"cards"`
+	Cards []CarouselCardStruct `json:"cards"`
 }
 
 type StatusTextStruct struct {
@@ -1690,6 +1724,169 @@ func mapKeyType(keyType string) string {
 	}
 }
 
+func nativeFlowButtonParamsJSON(params map[string]any) (*string, error) {
+	data, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	return proto.String(string(data)), nil
+}
+
+const privacyModeTSOffset = 77980457
+
+func createBaseBizAttrs() waBinary.Attrs {
+	return waBinary.Attrs{
+		"actual_actors":   "2",
+		"host_storage":    "2",
+		"privacy_mode_ts": strconv.FormatInt(time.Now().Unix()-privacyModeTSOffset, 10),
+	}
+}
+
+func buildNativeFlowAdditionalNodes(recipient types.JID, flowName string) []waBinary.Node {
+	bizNode := waBinary.Node{
+		Tag:   "biz",
+		Attrs: createBaseBizAttrs(),
+	}
+
+	if flowName == "payment_info" || flowName == "order_details" {
+		bizNode.Attrs["native_flow_name"] = flowName
+	} else {
+		bizNode.Content = []waBinary.Node{
+			{
+				Tag: "interactive",
+				Attrs: waBinary.Attrs{
+					"type": "native_flow",
+					"v":    "1",
+				},
+				Content: []waBinary.Node{{
+					Tag: "native_flow",
+					Attrs: waBinary.Attrs{
+						"v":    "9",
+						"name": "mixed",
+					},
+				}},
+			},
+			{
+				Tag: "quality_control",
+				Attrs: waBinary.Attrs{
+					"source_type": "third_party",
+				},
+			},
+		}
+	}
+
+	if recipient.Server == types.GroupServer {
+		return []waBinary.Node{bizNode}
+	}
+
+	return []waBinary.Node{
+		{
+			Tag: "bot",
+			Attrs: waBinary.Attrs{
+				"biz_bot": "1",
+			},
+		},
+		bizNode,
+	}
+}
+
+func mapUpperKeyType(keyType string) string {
+	switch strings.ToUpper(keyType) {
+	case "PHONE":
+		return "PHONE"
+	case "EMAIL":
+		return "EMAIL"
+	case "CPF":
+		return "CPF"
+	case "CNPJ":
+		return "CNPJ"
+	case "EVP", "RANDOM":
+		return "EVP"
+	default:
+		return keyType
+	}
+}
+
+func buildPaymentInfoParams(currency, merchantName, keyType, key string) map[string]any {
+	return map[string]any{
+		"currency":     currency,
+		"total_amount": map[string]any{"value": 0, "offset": 100},
+		"reference_id": utils.GenerateRandomString(11),
+		"type":         "physical-goods",
+		"order": map[string]any{
+			"status":     "pending",
+			"subtotal":   map[string]any{"value": 0, "offset": 100},
+			"order_type": "ORDER",
+			"items": []map[string]any{{
+				"name":        "",
+				"amount":      map[string]any{"value": 0, "offset": 100},
+				"quantity":    0,
+				"sale_amount": map[string]any{"value": 0, "offset": 100},
+			}},
+		},
+		"payment_settings": []map[string]any{{
+			"type": "pix_static_code",
+			"pix_static_code": map[string]any{
+				"merchant_name": merchantName,
+				"key":           key,
+				"key_type":      mapUpperKeyType(keyType),
+			},
+		}},
+		"share_payment_status": false,
+	}
+}
+
+func buildReviewAndPayParams(button Button) (map[string]any, error) {
+	if len(button.Items) == 0 {
+		return nil, errors.New("botao do tipo 'review_and_pay' requer pelo menos 1 item")
+	}
+
+	var subtotal int64
+	items := make([]map[string]any, 0, len(button.Items))
+	for i, item := range button.Items {
+		quantity := item.Quantity
+		if quantity <= 0 {
+			quantity = 1
+		}
+		subtotal += item.Amount * int64(quantity)
+
+		retailerID := item.RetailerID
+		if retailerID == "" {
+			retailerID = fmt.Sprintf("item_%d", i+1)
+		}
+
+		itemMap := map[string]any{
+			"retailer_id": retailerID,
+			"name":        item.Name,
+			"amount":      map[string]any{"value": item.Amount, "offset": 100},
+			"quantity":    quantity,
+		}
+		if item.ProductID != "" {
+			itemMap["product_id"] = item.ProductID
+		}
+		items = append(items, itemMap)
+	}
+
+	return map[string]any{
+		"currency":          button.Currency,
+		"total_amount":      map[string]any{"value": subtotal, "offset": 100},
+		"reference_id":      utils.GenerateRandomString(11),
+		"type":              "physical-goods",
+		"payment_method":    "confirm",
+		"payment_status":    "captured",
+		"payment_timestamp": time.Now().Unix(),
+		"order": map[string]any{
+			"status":      "completed",
+			"description": button.Name,
+			"subtotal":    map[string]any{"value": subtotal, "offset": 100},
+			"order_type":  "PAYMENT_REQUEST",
+			"items":       items,
+		},
+		"native_payment_methods": []any{},
+		"share_payment_status":   false,
+	}, nil
+}
+
 func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.Instance) (*MessageSendStruct, error) {
 	client, err := s.ensureClientConnected(instance.Id)
 	if err != nil {
@@ -1698,18 +1895,21 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 
 	hasReply := false
 	hasPix := false
-	hasOtherTypes := false
+	hasReviewAndPay := false
+	hasCTA := false
 	replyCount := 0
 
 	for _, v := range data.Buttons {
-		switch v.Type {
+		switch strings.ToLower(v.Type) {
 		case "reply":
 			hasReply = true
 			replyCount++
 		case "pix":
 			hasPix = true
+		case "review_and_pay":
+			hasReviewAndPay = true
 		default:
-			hasOtherTypes = true
+			hasCTA = true
 		}
 	}
 
@@ -1717,7 +1917,7 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 		if replyCount > 3 {
 			return nil, errors.New("máximo de 3 botões do tipo 'reply' permitidos")
 		}
-		if hasOtherTypes {
+		if hasCTA || hasPix || hasReviewAndPay {
 			return nil, errors.New("botões do tipo 'reply' não podem ser misturados com outros tipos")
 		}
 	}
@@ -1728,30 +1928,63 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 		}
 	}
 
+	if hasReviewAndPay {
+		if len(data.Buttons) > 1 {
+			return nil, errors.New("botão do tipo 'review_and_pay' não pode ser combinado com outros botões")
+		}
+	}
+
 	buttons := []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{}
+	nativeFlowName := "mixed"
 
 	for _, v := range data.Buttons {
 		var paramsJSON *string
 
 		var name *string
 
-		switch v.Type {
+		switch strings.ToLower(v.Type) {
 		case "reply":
 			name = proto.String("quick_reply")
-			paramsJSON = proto.String(`{"display_text":"` + v.DisplayText + `","id":"` + v.Id + `"}`)
+			paramsJSON, err = nativeFlowButtonParamsJSON(map[string]any{
+				"display_text": v.DisplayText,
+				"id":           v.Id,
+			})
 		case "copy":
 			name = proto.String("cta_copy")
-			paramsJSON = proto.String(`{"display_text":"` + v.DisplayText + `","copy_code":"` + v.CopyCode + `"}`)
+			paramsJSON, err = nativeFlowButtonParamsJSON(map[string]any{
+				"display_text": v.DisplayText,
+				"copy_code":    v.CopyCode,
+			})
 		case "url":
 			name = proto.String("cta_url")
-			paramsJSON = proto.String(`{"display_text":"` + v.DisplayText + `","url":"` + v.URL + `","merchant_url":"` + v.URL + `"}`)
+			paramsJSON, err = nativeFlowButtonParamsJSON(map[string]any{
+				"display_text": v.DisplayText,
+				"url":          v.URL,
+				"merchant_url": v.URL,
+			})
 		case "call":
 			name = proto.String("cta_call")
-			paramsJSON = proto.String(`{"display_text":"` + v.DisplayText + `","phone_number":"` + v.PhoneNumber + `"}`)
+			paramsJSON, err = nativeFlowButtonParamsJSON(map[string]any{
+				"display_text": v.DisplayText,
+				"phone_number": v.PhoneNumber,
+			})
 		case "pix":
-			randomId := utils.GenerateRandomString(11)
 			name = proto.String("payment_info")
-			paramsJSON = proto.String(`{"currency":"` + v.Currency + `","total_amount":{"value":0,"offset":100},"reference_id":"` + randomId + `","type":"physical-goods","order":{"status":"pending","subtotal":{"value":0,"offset":100},"order_type":"ORDER","items":[{"name":"","amount":{"value":0,"offset":100},"quantity":0,"sale_amount":{"value":0,"offset":100}}]},"payment_settings":[{"type":"pix_static_code","pix_static_code":{"merchant_name":"` + v.Name + `","key":"` + v.Key + `","key_type":"` + mapKeyType(v.KeyType) + `"}}],"share_payment_status":false}`)
+			paramsJSON, err = nativeFlowButtonParamsJSON(buildPaymentInfoParams(v.Currency, v.Name, v.KeyType, v.Key))
+			nativeFlowName = "payment_info"
+		case "review_and_pay":
+			name = proto.String("review_and_pay")
+			var reviewParams map[string]any
+			reviewParams, err = buildReviewAndPayParams(v)
+			if err == nil {
+				paramsJSON, err = nativeFlowButtonParamsJSON(reviewParams)
+			}
+			nativeFlowName = "order_details"
+		default:
+			return nil, fmt.Errorf("tipo de botão não suportado: %s", v.Type)
+		}
+		if err != nil {
+			return nil, err
 		}
 
 		buttons = append(buttons, &waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
@@ -1761,114 +1994,216 @@ func (s *sendService) SendButton(data *ButtonStruct, instance *instance_model.In
 	}
 
 	messageId := client.GenerateMessageID()
-	templateId := strconv.FormatInt(time.Now().UnixNano()/1000000, 10)
-	messageParamsJSON := `{"from":"api","templateId":` + templateId + `}`
+	messageParamsJSON, err := nativeFlowButtonParamsJSON(map[string]any{
+		"from":       "api",
+		"templateId": string(messageId),
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	var msg *waE2E.Message
 
-	if hasPix {
+	if hasPix || hasReviewAndPay {
+		if data.Description == "" && hasReviewAndPay {
+			data.Description = "Seu pedido esta pronto para pagamento."
+		}
 		msg = &waE2E.Message{
 			InteractiveMessage: &waE2E.InteractiveMessage{
+				Body: &waE2E.InteractiveMessage_Body{
+					Text: proto.String(data.Description),
+				},
 				InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
 					NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
 						Buttons:           buttons,
-						MessageParamsJSON: &messageParamsJSON,
+						MessageParamsJSON: messageParamsJSON,
+						MessageVersion:    proto.Int32(1),
 					},
 				},
+				ContextInfo: &waE2E.ContextInfo{},
+			},
+			MessageContextInfo: &waE2E.MessageContextInfo{
+				DeviceListMetadata: &waE2E.DeviceListMetadata{},
 			},
 		}
-	} else {
-		body := func() string {
-			t := "*" + data.Title + "*"
-			if data.Description != "" {
-				t += "\n\n" + data.Description + "\n"
+		if data.Footer != "" {
+			msg.InteractiveMessage.Footer = &waE2E.InteractiveMessage_Footer{
+				Text: proto.String(data.Footer),
 			}
-			return t
-		}()
+		}
+	} else {
+		header := &waE2E.InteractiveMessage_Header{
+			Title:              proto.String(data.Title),
+			HasMediaAttachment: proto.Bool(false),
+		}
 
-		interactiveMsg := &waE2E.InteractiveMessage{
+		if data.ImageURL != "" {
+			resp, err := http.Get(data.ImageURL)
+			if err == nil {
+				defer resp.Body.Close()
+				fileData, err := io.ReadAll(resp.Body)
+				if err == nil {
+					uploaded, err := client.Upload(context.Background(), fileData, whatsmeow.MediaImage)
+					if err == nil {
+						var jpegThumb []byte
+						img, _, decErr := image.Decode(bytes.NewReader(fileData))
+						if decErr == nil {
+							bounds := img.Bounds()
+							thumbWidth := 72
+							thumbHeight := int(float64(bounds.Dy()) * float64(thumbWidth) / float64(bounds.Dx()))
+							if thumbHeight < 1 {
+								thumbHeight = 1
+							}
+							thumbImg := image.NewRGBA(image.Rect(0, 0, thumbWidth, thumbHeight))
+							for y := 0; y < thumbHeight; y++ {
+								for x := 0; x < thumbWidth; x++ {
+									srcX := x * bounds.Dx() / thumbWidth
+									srcY := y * bounds.Dy() / thumbHeight
+									thumbImg.Set(x, y, img.At(srcX+bounds.Min.X, srcY+bounds.Min.Y))
+								}
+							}
+							var thumbBuf bytes.Buffer
+							if jpeg.Encode(&thumbBuf, thumbImg, &jpeg.Options{Quality: 50}) == nil {
+								jpegThumb = thumbBuf.Bytes()
+							}
+						}
+						header.HasMediaAttachment = proto.Bool(true)
+						header.Media = &waE2E.InteractiveMessage_Header_ImageMessage{
+							ImageMessage: &waE2E.ImageMessage{
+								URL:           proto.String(uploaded.URL),
+								DirectPath:    proto.String(uploaded.DirectPath),
+								MediaKey:      uploaded.MediaKey,
+								Mimetype:      proto.String("image/jpeg"),
+								FileEncSHA256: uploaded.FileEncSHA256,
+								FileSHA256:    uploaded.FileSHA256,
+								FileLength:    proto.Uint64(uint64(len(fileData))),
+								JPEGThumbnail: jpegThumb,
+							},
+						}
+					}
+				}
+			}
+		} else if data.VideoURL != "" {
+			resp, err := http.Get(data.VideoURL)
+			if err == nil {
+				defer resp.Body.Close()
+				fileData, err := io.ReadAll(resp.Body)
+				if err == nil {
+					uploaded, err := client.Upload(context.Background(), fileData, whatsmeow.MediaVideo)
+					if err == nil {
+						header.HasMediaAttachment = proto.Bool(true)
+						header.Media = &waE2E.InteractiveMessage_Header_VideoMessage{
+							VideoMessage: &waE2E.VideoMessage{
+								URL:           proto.String(uploaded.URL),
+								DirectPath:    proto.String(uploaded.DirectPath),
+								MediaKey:      uploaded.MediaKey,
+								Mimetype:      proto.String("video/mp4"),
+								FileEncSHA256: uploaded.FileEncSHA256,
+								FileSHA256:    uploaded.FileSHA256,
+								FileLength:    proto.Uint64(uint64(len(fileData))),
+							},
+						}
+					}
+				}
+			}
+		}
+
+		interactive := &waE2E.InteractiveMessage{
+			Header: header,
 			Body: &waE2E.InteractiveMessage_Body{
-				Text: &body,
+				Text: proto.String(data.Description),
 			},
 			InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
 				NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
 					Buttons:           buttons,
-					MessageParamsJSON: &messageParamsJSON,
+					MessageParamsJSON: messageParamsJSON,
 					MessageVersion:    proto.Int32(1),
 				},
 			},
 			ContextInfo: &waE2E.ContextInfo{},
 		}
 
-		// Footer conditional - only add if not empty (iOS compatibility)
 		if data.Footer != "" {
-			interactiveMsg.Footer = &waE2E.InteractiveMessage_Footer{
-				Text: &data.Footer,
-			}
-		}
-
-		// Header with title
-		if data.Title != "" {
-			interactiveMsg.Header = &waE2E.InteractiveMessage_Header{
-				Title:              proto.String(data.Title),
-				HasMediaAttachment: proto.Bool(false),
+			interactive.Footer = &waE2E.InteractiveMessage_Footer{
+				Text: proto.String(data.Footer),
 			}
 		}
 
 		msg = &waE2E.Message{
-			InteractiveMessage: interactiveMsg,
+			InteractiveMessage: interactive,
+			MessageContextInfo: &waE2E.MessageContextInfo{
+				DeviceListMetadata: &waE2E.DeviceListMetadata{},
+			},
 		}
 	}
 
-	recipient, err := s.validateAndCheckUserExists(data.Number, data.FormatJid, &data.Quoted.MessageID, &data.Quoted.MessageID, instance)
-	if err != nil {
-		s.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Error validating message fields or user check: %v", instance.Id, err)
-		return nil, err
-	}
+	return s.SendMessage(instance, msg, "InteractiveMessage", &SendDataStruct{
+		Id:           messageId,
+		Number:       data.Number,
+		Delay:        data.Delay,
+		MentionAll:   data.MentionAll,
+		MentionedJID: data.MentionedJID,
+		FormatJid:    data.FormatJid,
+		Quoted:       data.Quoted,
+		NativeFlow:   nativeFlowName,
+	})
+}
 
-	if data.Delay > 0 {
-		err := client.SendChatPresence(context.Background(), recipient, types.ChatPresence("composing"), types.ChatPresenceMedia(""))
-		if err != nil {
-			return nil, err
-		}
-
-		time.Sleep(time.Duration(data.Delay) * time.Millisecond)
-
-		err = client.SendChatPresence(context.Background(), recipient, types.ChatPresence("paused"), types.ChatPresenceMedia(""))
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	response, err := client.SendMessage(context.Background(), recipient, msg, whatsmeow.SendRequestExtra{ID: messageId})
+func (s *sendService) SendPix(data *PixStruct, instance *instance_model.Instance) (*MessageSendStruct, error) {
+	paramsJSON, err := nativeFlowButtonParamsJSON(buildPaymentInfoParams("BRL", data.MerchantName, data.KeyType, data.PixKey))
 	if err != nil {
 		return nil, err
 	}
 
-	messageInfo := types.MessageInfo{
-		MessageSource: types.MessageSource{
-			Chat:     recipient,
-			Sender:   *client.Store.ID,
-			IsFromMe: true,
-			IsGroup:  false,
-		},
-		ID:        messageId,
-		Timestamp: time.Now(),
-		ServerID:  response.ServerID,
-		Type:      "ButtonMessage",
+	messageParamsJSON, err := nativeFlowButtonParamsJSON(map[string]any{
+		"from":       "api",
+		"templateId": strconv.FormatInt(time.Now().UnixMilli(), 10),
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	messageSent := &MessageSendStruct{
-		Info:    messageInfo,
-		Message: msg,
-		MessageContextInfo: &waE2E.ContextInfo{
-			StanzaID:      proto.String(data.Quoted.MessageID),
-			Participant:   proto.String(data.Quoted.Participant),
-			QuotedMessage: &waE2E.Message{Conversation: proto.String("")},
+	msg := &waE2E.Message{
+		InteractiveMessage: &waE2E.InteractiveMessage{
+			Header: &waE2E.InteractiveMessage_Header{
+				Title:              proto.String(data.HeaderTitle),
+				HasMediaAttachment: proto.Bool(false),
+			},
+			Body: &waE2E.InteractiveMessage_Body{
+				Text: proto.String(data.BodyText),
+			},
+			InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
+				NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+					Buttons: []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{{
+						Name:             proto.String("payment_info"),
+						ButtonParamsJSON: paramsJSON,
+					}},
+					MessageParamsJSON: messageParamsJSON,
+					MessageVersion:    proto.Int32(1),
+				},
+			},
+			ContextInfo: &waE2E.ContextInfo{},
+		},
+		MessageContextInfo: &waE2E.MessageContextInfo{
+			DeviceListMetadata: &waE2E.DeviceListMetadata{},
 		},
 	}
 
-	return messageSent, nil
+	if data.FooterText != "" {
+		msg.InteractiveMessage.Footer = &waE2E.InteractiveMessage_Footer{
+			Text: proto.String(data.FooterText),
+		}
+	}
+
+	return s.SendMessage(instance, msg, "InteractiveMessage", &SendDataStruct{
+		Number:       data.Number,
+		Delay:        data.Delay,
+		MentionAll:   data.MentionAll,
+		MentionedJID: data.MentionedJID,
+		FormatJid:    data.FormatJid,
+		Quoted:       data.Quoted,
+		NativeFlow:   "payment_info",
+	})
 }
 
 func stringPointer(s string) *string {
@@ -2332,6 +2667,11 @@ func (s *sendService) SendMessage(instance *instance_model.Instance, msg *waE2E.
 		s.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] Newsletter detected, using MediaHandle: %s", instance.Id, data.MediaHandle)
 	}
 
+	if data.NativeFlow != "" {
+		additionalNodes := buildNativeFlowAdditionalNodes(recipient, data.NativeFlow)
+		sendExtra.AdditionalNodes = &additionalNodes
+	}
+
 	response, err := s.clientPointer[instance.Id].SendMessage(context.Background(), recipient, msg, sendExtra)
 	if err != nil {
 		s.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Error sending message: %v", instance.Id, err)
@@ -2542,14 +2882,14 @@ func (s *sendService) SendCarousel(data *CarouselStruct, instance *instance_mode
 							header.HasMediaAttachment = proto.Bool(true)
 							header.Media = &waE2E.InteractiveMessage_Header_ImageMessage{
 								ImageMessage: &waE2E.ImageMessage{
-									URL:            proto.String(uploaded.URL),
-									DirectPath:     proto.String(uploaded.DirectPath),
-									MediaKey:       uploaded.MediaKey,
-									Mimetype:       proto.String("image/jpeg"),
-									FileEncSHA256:  uploaded.FileEncSHA256,
-									FileSHA256:     uploaded.FileSHA256,
-									FileLength:     proto.Uint64(uint64(len(fileData))),
-									JPEGThumbnail:  jpegThumb,
+									URL:           proto.String(uploaded.URL),
+									DirectPath:    proto.String(uploaded.DirectPath),
+									MediaKey:      uploaded.MediaKey,
+									Mimetype:      proto.String("image/jpeg"),
+									FileEncSHA256: uploaded.FileEncSHA256,
+									FileSHA256:    uploaded.FileSHA256,
+									FileLength:    proto.Uint64(uint64(len(fileData))),
+									JPEGThumbnail: jpegThumb,
 								},
 							}
 						}

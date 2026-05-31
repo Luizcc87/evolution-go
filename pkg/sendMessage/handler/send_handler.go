@@ -21,6 +21,7 @@ type SendHandler interface {
 	SendLocation(ctx *gin.Context)
 	SendContact(ctx *gin.Context)
 	SendButton(ctx *gin.Context)
+	SendPix(ctx *gin.Context)
 	SendList(ctx *gin.Context)
 	SendCarousel(ctx *gin.Context)
 	SendStatusText(ctx *gin.Context)
@@ -540,17 +541,69 @@ func (s *sendHandler) SendButton(ctx *gin.Context) {
 		return
 	}
 
-	if data.Description == "" {
+	hasReviewAndPay := false
+	for _, button := range data.Buttons {
+		if strings.EqualFold(button.Type, "review_and_pay") {
+			hasReviewAndPay = true
+			break
+		}
+	}
+
+	if data.Description == "" && !hasReviewAndPay {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "description is required"})
 		return
 	}
 
-	if data.Footer == "" {
+	if data.Footer == "" && !hasReviewAndPay {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "footer is required"})
 		return
 	}
 
 	message, err := s.sendMessageService.SendButton(data, instance)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{"message": "success", "data": message})
+}
+
+// Send a dedicated PIX payment message
+// @Summary Send a PIX payment message
+// @Description Send a dedicated WhatsApp native payment button using PIX.
+// @Description
+// @Description Required body fields: `number`, `headerTitle`, `bodyText`, `merchantName`, `pixKey`, `keyType`.
+// @Description Supported `keyType` values: `CPF`, `CNPJ`, `EMAIL`, `PHONE`, `EVP`.
+// @Tags Send Message
+// @Accept json
+// @Produce json
+// @Param message body send_service.PixStruct true "PIX data"
+// @Success 200 {object} gin.H "success"
+// @Failure 400 {object} gin.H "Error on validation"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /send/pix [post]
+func (s *sendHandler) SendPix(ctx *gin.Context) {
+	getInstance := ctx.MustGet("instance")
+
+	instance, ok := getInstance.(*instance_model.Instance)
+	if !ok {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "instance not found"})
+		return
+	}
+
+	var data *send_service.PixStruct
+	err := ctx.ShouldBindBodyWithJSON(&data)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if data.Number == "" || data.HeaderTitle == "" || data.BodyText == "" || data.MerchantName == "" || data.PixKey == "" || data.KeyType == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "number, headerTitle, bodyText, merchantName, pixKey and keyType are required"})
+		return
+	}
+
+	message, err := s.sendMessageService.SendPix(data, instance)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

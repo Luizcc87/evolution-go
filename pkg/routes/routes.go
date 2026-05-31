@@ -123,6 +123,7 @@ func (r *Routes) AssignRoutes(eng *gin.Engine) {
 			routes.POST("/location", r.jidValidationMiddleware.ValidateNumberFieldWithFormatJid(), r.sendHandler.SendLocation)
 			routes.POST("/contact", r.jidValidationMiddleware.ValidateContactFields(), r.sendHandler.SendContact) // TODO: send multiple contacts
 			routes.POST("/button", r.jidValidationMiddleware.ValidateNumberFieldWithFormatJid(), r.sendHandler.SendButton)
+			routes.POST("/pix", r.jidValidationMiddleware.ValidateNumberFieldWithFormatJid(), r.sendHandler.SendPix)
 			routes.POST("/list", r.jidValidationMiddleware.ValidateNumberFieldWithFormatJid(), r.sendHandler.SendList)
 			routes.POST("/carousel", r.jidValidationMiddleware.ValidateNumberFieldWithFormatJid(), r.sendHandler.SendCarousel)
 			routes.POST("/status/text", r.sendHandler.SendStatusText)
