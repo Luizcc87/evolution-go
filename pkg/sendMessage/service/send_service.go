@@ -2287,22 +2287,35 @@ func sectionsToString(data *ListStruct) (string, error) {
 }
 
 func (s *sendService) SendList(data *ListStruct, instance *instance_model.Instance) (*MessageSendStruct, error) {
-	// Legacy ListMessage format - works on iOS, Android and Web
-	// Matching PAPI Node.js default (non-modern) path exactly
-
 	buttonText := data.ButtonText
 	if buttonText == "" {
 		buttonText = "Ver Menu"
 	}
 
-	// Build sections in legacy ListMessage format
-	var sections []*waE2E.ListMessage_Section
+	// Build sections JSON for NativeFlowMessage single_select
+	type nfRow struct {
+		Header      string `json:"header"`
+		Title       string `json:"title"`
+		Description string `json:"description"`
+		ID          string `json:"id"`
+	}
+	type nfSection struct {
+		Title          string  `json:"title"`
+		HighlightLabel string  `json:"highlight_label"`
+		Rows           []nfRow `json:"rows"`
+	}
+	type nfList struct {
+		Title    string      `json:"title"`
+		Sections []nfSection `json:"sections"`
+	}
+
+	var nfSections []nfSection
 	for _, sec := range data.Sections {
 		sectionTitle := sec.Title
 		if sectionTitle == "" {
 			sectionTitle = " "
 		}
-		var rows []*waE2E.ListMessage_Row
+		var rows []nfRow
 		for i, r := range sec.Rows {
 			rowTitle := r.Title
 			if rowTitle == "" {
@@ -2310,38 +2323,90 @@ func (s *sendService) SendList(data *ListStruct, instance *instance_model.Instan
 			}
 			rowId := r.RowId
 			if rowId == "" {
-				rowId = fmt.Sprintf("row_%d_%d", i, len(rows))
+				rowId = fmt.Sprintf("row_%d", i)
 			}
-			rows = append(rows, &waE2E.ListMessage_Row{
-				Title:       proto.String(rowTitle),
-				Description: proto.String(r.Description),
-				RowID:       proto.String(rowId),
+			rows = append(rows, nfRow{
+				Header:      rowTitle,
+				Title:       rowTitle,
+				Description: r.Description,
+				ID:          rowId,
 			})
 		}
-		sections = append(sections, &waE2E.ListMessage_Section{
-			Title: proto.String(sectionTitle),
-			Rows:  rows,
+		nfSections = append(nfSections, nfSection{
+			Title:          sectionTitle,
+			HighlightLabel: "",
+			Rows:           rows,
 		})
 	}
 
-	listType := waE2E.ListMessage_SINGLE_SELECT
-	listMessage := &waE2E.ListMessage{
-		Title:       proto.String(data.Title),
-		Description: proto.String(data.Description),
-		ButtonText:  proto.String(buttonText),
-		FooterText:  proto.String(data.FooterText),
-		ListType:    &listType,
-		Sections:    sections,
+	listJSON, err := json.Marshal(nfList{Title: buttonText, Sections: nfSections})
+	if err != nil {
+		return nil, err
 	}
 
-	// Send as plain ListMessage (NO ViewOnceMessage wrapper) - matching PAPI Node.js
+	paramsJSON, err := nativeFlowButtonParamsJSON(map[string]any{
+		"list": json.RawMessage(listJSON),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := s.ensureClientConnected(instance.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	messageId := client.GenerateMessageID()
+	messageParamsJSON, err := nativeFlowButtonParamsJSON(map[string]any{
+		"from":       "api",
+		"templateId": string(messageId),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	interactive := &waE2E.InteractiveMessage{
+		Header: &waE2E.InteractiveMessage_Header{
+			Title:              proto.String(data.Title),
+			HasMediaAttachment: proto.Bool(false),
+		},
+		Body: &waE2E.InteractiveMessage_Body{
+			Text: proto.String(data.Description),
+		},
+		InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
+			NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
+				Buttons: []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{{
+					Name:             proto.String("single_select"),
+					ButtonParamsJSON: paramsJSON,
+				}},
+				MessageParamsJSON: messageParamsJSON,
+				MessageVersion:    proto.Int32(1),
+			},
+		},
+		ContextInfo: &waE2E.ContextInfo{},
+	}
+
+	if data.FooterText != "" {
+		interactive.Footer = &waE2E.InteractiveMessage_Footer{
+			Text: proto.String(data.FooterText),
+		}
+	}
+
 	msg := &waE2E.Message{
-		ListMessage: listMessage,
+		InteractiveMessage: interactive,
+		MessageContextInfo: &waE2E.MessageContextInfo{
+			DeviceListMetadata: &waE2E.DeviceListMetadata{},
+		},
 	}
 
-	message, err := s.SendMessage(instance, msg, "ListMessage", &SendDataStruct{
-		Number: data.Number,
-		Delay:  data.Delay,
+	message, err := s.SendMessage(instance, msg, "InteractiveMessage", &SendDataStruct{
+		Id:           messageId,
+		Number:       data.Number,
+		Delay:        data.Delay,
+		MentionAll:   data.MentionAll,
+		MentionedJID: data.MentionedJID,
+		FormatJid:    data.FormatJid,
+		Quoted:       data.Quoted,
 	})
 
 	if err != nil {
