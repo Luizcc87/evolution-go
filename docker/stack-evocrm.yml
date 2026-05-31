@@ -10,17 +10,17 @@ services:
       SERVER_PORT: 3300
       CLIENT_NAME: "evolution"
 
-      # Segurança (ALTERE a chave abaixo)
-      GLOBAL_API_KEY: "429683C4C977415CAAFCCE10F7D57E11"
+      # Segurança (defina via variável de ambiente ou Docker secret)
+      GLOBAL_API_KEY: "${GLOBAL_API_KEY}"
 
       # Banco de Dados PostgreSQL (serviço 'postgres' já existente)
-      POSTGRES_AUTH_DB: "postgresql://pastorini:pastorini123@postgres:5432/pastorini_api?sslmode=disable"
-      POSTGRES_USERS_DB: "postgresql://pastorini:pastorini123@postgres:5432/pastorini_api?sslmode=disable"
+      POSTGRES_AUTH_DB: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=require"
+      POSTGRES_USERS_DB: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=require"
       POSTGRES_HOST: "postgres"
       POSTGRES_PORT: "5432"
-      POSTGRES_USER: "pastorini"
-      POSTGRES_PASSWORD: "pastorini123"
-      POSTGRES_DB: "pastorini_api"
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_DB: "${POSTGRES_DB}"
       DATABASE_SAVE_MESSAGES: "false"
 
       # Logs e Debug
