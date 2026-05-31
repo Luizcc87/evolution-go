@@ -397,18 +397,6 @@ type StatusMediaStruct struct {
 	Id      string `json:"id"`
 }
 
-type StatusTextStruct struct {
-	Text string `json:"text"`
-	Id   string `json:"id"`
-}
-
-type StatusMediaStruct struct {
-	Type    string `json:"type"`
-	Url     string `json:"url"`
-	Caption string `json:"caption"`
-	Id      string `json:"id"`
-}
-
 type MessageSendStruct struct {
 	Info               types.MessageInfo
 	Message            *waE2E.Message
